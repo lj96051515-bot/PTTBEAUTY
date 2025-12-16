@@ -10,20 +10,29 @@ app = Flask(__name__)
 beauty_posts = []
 
 def get_real_image_url(ptt_link):
-    """進入文章抓取 Imgur 圖片直接連結"""
+    """
+    強化版爬圖邏輯：進入文章抓取 Imgur 或其他圖片網址
+    """
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         res = requests.get(ptt_link, cookies={"over18": "1"}, headers=headers, timeout=5)
-        match = re.search(r'https?://(?:i\.)?imgur\.com/[A-Za-z0-9]+', res.text)
-        if match:
-            url = match.group(0)
-            if "i.imgur.com" not in url:
-                url = url.replace("imgur.com", "i.imgur.com") + ".jpg"
-            elif not url.endswith(('.jpg', '.png', '.jpeg')):
-                url += ".jpg"
-            return url
-    except:
-        pass
+        
+        # 1. 優先搜尋 Imgur 的各種格式 (包含相簿 /a/ 或直接圖片)
+        # Regex 會抓取含有 imgur.com 的字串
+        imgur_match = re.search(r'https?://(?:i\.)?imgur\.com/([A-Za-z0-9]+)(?:\.[a-z]+)?', res.text)
+        
+        if imgur_match:
+            img_id = imgur_match.group(1)
+            # 強制轉換為 i.imgur.com/xxxx.jpg 格式，這是最穩定的直接顯圖網址
+            return f"https://i.imgur.com/{img_id}.jpg"
+        
+        # 2. 如果沒找到 Imgur，尋找任何以 jpg, png, jpeg 結尾的網址
+        other_match = re.search(r'https?://[^\s\'"]+\.(?:jpg|jpeg|png|gif)', res.text)
+        if other_match:
+            return other_match.group(0)
+            
+    except Exception as e:
+        print(f"爬取圖片網址失敗 ({ptt_link}): {e}")
     return None
 
 def fetch_beauty_boom():
@@ -33,8 +42,8 @@ def fetch_beauty_boom():
             cookies = {"over18": "1"}
             all_temp_posts = []
             
-            print("正在開啟時空傳送門...抓取表特版 1000 則爆文...")
-            # 搜尋 recommend:100，抓取 50 頁搜尋結果
+            print("正在掃描表特版 1000 則爆文資料...")
+            # 搜尋 recommend:100 (爆文)，抓取前 50 頁搜尋結果
             for i in range(1, 51):
                 search_url = f"https://www.ptt.cc/bbs/Beauty/search?page={i}&q=recommend%3A100"
                 res = requests.get(search_url, cookies=cookies, timeout=10)
@@ -45,47 +54,50 @@ def fetch_beauty_boom():
                 
                 for art in arts:
                     t_tag = art.select_one("div.title a")
+                    # 只抓標題有 [正妹] 的文章，過濾掉 [公告] 或 [帥哥]
                     if t_tag and "[正妹]" in t_tag.text:
                         art_url = "https://www.ptt.cc" + t_tag["href"]
-                        # 先把基本資料存入，圖片等一下顯示時再由瀏覽器加載或預抓
                         all_temp_posts.append({
                             "title": t_tag.text,
                             "url": art_url,
                             "date": art.select_one("div.date").text,
-                            "img": "" # 初始為空
+                            "img": "" 
                         })
                 
                 if i % 10 == 0:
-                    time.sleep(0.5)
+                    time.sleep(0.5) # 防止被 PTT 暫時封鎖
             
-            # 為了效能，我們只幫前 100 則抓圖，其他的點進去再看，避免啟動太慢
-            print("正在為前 100 則精選抓取預覽圖...")
+            # 效能考量：僅幫前 100 則「最熱門/最新」的爆文抓取預覽圖
+            # 這樣網站載入會快很多
+            print("正在為前 100 則爆文提取圖片...")
             for post in all_temp_posts[:100]:
-                post['img'] = get_real_image_url(post['url'])
+                if not post['img']:
+                    post['img'] = get_real_image_url(post['url'])
             
             beauty_posts = all_temp_posts
-            print(f"抓取完成！共存儲 {len(beauty_posts)} 則跨年分爆文")
+            print(f"全部完成！目前庫存 {len(beauty_posts)} 則精選")
             
         except Exception as e:
-            print(f"錯誤: {e}")
+            print(f"更新發生錯誤: {e}")
         
-        time.sleep(3600) # 每小時更新一次即可
+        time.sleep(3600) # 每小時自動更新一次
 
 @app.route('/')
 def home():
     style = """
     <style>
-        body { font-family: sans-serif; background: #000; color: #fff; margin: 0; text-align: center; }
-        .header { background: linear-gradient(45deg, #6200ea, #03dac5); padding: 30px; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        .search-box { width: 80%; max-width: 600px; padding: 12px; margin-top: 15px; border-radius: 25px; border: none; font-size: 16px; outline: none; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; padding: 20px; }
-        .card { background: #1a1a1a; border-radius: 15px; overflow: hidden; transition: 0.3s; position: relative; height: 400px; border: 1px solid #333; }
-        .card:hover { transform: scale(1.03); border-color: #03dac5; }
-        .card img { width: 100%; height: 100%; object-fit: cover; }
-        .info { position: absolute; bottom: 0; background: rgba(0,0,0,0.8); width: 100%; padding: 15px; box-sizing: border-box; }
-        .date { font-size: 12px; color: #03dac5; }
-        a { color: white; text-decoration: none; display: block; height: 100%; }
-        .no-img { display: flex; align-items: center; justify-content: center; height: 100%; background: #222; color: #555; }
+        body { font-family: "Microsoft JhengHei", sans-serif; background: #0a0a0a; color: #fff; margin: 0; }
+        .header { background: linear-gradient(135deg, #1a1a1a 0%, #000 100%); padding: 30px; position: sticky; top: 0; z-index: 100; border-bottom: 2px solid #333; }
+        .search-box { width: 90%; max-width: 500px; padding: 15px; border-radius: 30px; border: 1px solid #444; background: #222; color: #fff; font-size: 16px; margin-top: 15px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; padding: 25px; }
+        .card { background: #161616; border-radius: 12px; overflow: hidden; transition: 0.4s; border: 1px solid #222; height: 450px; }
+        .card:hover { transform: translateY(-10px); border-color: #ff2d55; box-shadow: 0 10px 20px rgba(255,45,85,0.2); }
+        .card img { width: 100%; height: 75%; object-fit: cover; }
+        .no-img { width: 100%; height: 75%; display: flex; align-items: center; justify-content: center; background: #222; color: #666; font-size: 14px; }
+        .info { padding: 15px; text-align: left; }
+        .date { font-size: 12px; color: #ff2d55; margin-bottom: 5px; }
+        .title-text { font-size: 15px; font-weight: bold; line-height: 1.4; color: #eee; text-decoration: none; }
+        a { text-decoration: none; }
     </style>
     """
     
@@ -95,7 +107,7 @@ def home():
         let input = document.getElementById('searchInput').value.toLowerCase();
         let cards = document.getElementsByClassName('card');
         for (let i = 0; i < cards.length; i++) {
-            let title = cards[i].innerText.toLowerCase();
+            let title = cards[i].querySelector('.title-text').innerText.toLowerCase();
             cards[i].style.display = title.includes(input) ? "" : "none";
         }
     }
@@ -104,14 +116,14 @@ def home():
     
     cards_html = ""
     for p in beauty_posts:
-        img_tag = f"<img src='{p['img']}' loading='lazy'>" if p['img'] else "<div class='no-img'>點擊查看原文圖片</div>"
+        img_content = f"<img src='{p['img']}' loading='lazy'>" if p['img'] else "<div class='no-img'>點擊看原文圖</div>"
         cards_html += f"""
         <div class='card'>
             <a href='{p['url']}' target='_blank'>
-                {img_tag}
+                {img_content}
                 <div class='info'>
                     <div class='date'>{p['date']}</div>
-                    {p['title']}
+                    <div class='title-text'>{p['title']}</div>
                 </div>
             </a>
         </div>
@@ -126,10 +138,12 @@ def home():
         </head>
         <body>
             <div class='header'>
-                <h1>💎 表特版千則爆文名人堂</h1>
-                <input type="text" id="searchInput" onkeyup="searchPosts()" placeholder="搜尋關鍵字 (如: 氣質, 日系, 醫生)..." class="search-box">
+                <h1 style='margin:0; color:#ff2d55;'>PTT Beauty 名人堂</h1>
+                <input type="text" id="searchInput" onkeyup="searchPosts()" placeholder="搜尋正妹關鍵字..." class="search-box">
             </div>
-            <div class='grid'>{cards_html if cards_html else '<h2>考古學家正在挖掘資料中... 請等候約 60 秒後刷新網頁。</h2>'}</div>
+            <div class='grid'>
+                {cards_html if cards_html else '<h2 style="width:100%; text-align:center;">考古中...請稍候 30-60 秒後刷新網頁</h2>'}
+            </div>
             {script}
         </body>
     </html>
