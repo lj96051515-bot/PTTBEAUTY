@@ -7,13 +7,15 @@ import os
 import re
 
 app = Flask(__name__)
-
-gossiping_logs = []
+# 存放抓到的資料
 beauty_images = []
 
 def get_img_url(link):
     try:
-        res = requests.get(link, cookies={"over18": "1"}, timeout=5)
+        # 加上模擬瀏覽器的 Headers，防止被 PTT 拒絕
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        res = requests.get(link, cookies={"over18": "1"}, headers=headers, timeout=5)
+        # 尋找 Imgur 圖片 ID
         match = re.search(r'https?://(?:i\.)?imgur\.com/([A-Za-z0-9]+)', res.text)
         if match:
             return f"https://i.imgur.com/{match.group(1)}.jpg"
@@ -21,29 +23,23 @@ def get_img_url(link):
     return ""
 
 def fetch_data():
-    global gossiping_logs, beauty_images
-    time.sleep(5)  # 延遲啟動，確保 Flask 已經完全跑起來
-    
+    global beauty_images
+    print(">>> [系統] 啟動表特考古模式...", flush=True)
     while True:
         try:
-            print(">>> [開始更新] 八卦版...")
-            res = requests.get("https://www.ptt.cc/bbs/Gossiping/index.html", cookies={"over18": "1"}, timeout=10)
-            soup = BeautifulSoup(res.text, "html.parser")
-            g_content = f"<div class='section-title'>八卦最新 ({time.strftime('%H:%M:%S')})</div>"
-            for art in soup.select("div.r-ent")[:10]:
-                t_tag = art.select_one("div.title a")
-                if t_tag:
-                    g_content += f"<div class='post'>· <a href='https://www.ptt.cc{t_tag['href']}' target='_blank'>{t_tag.text}</a></div>"
-            gossiping_logs = [g_content]
-
-            print(">>> [開始挖掘] 表特爆文...")
             temp_list = []
-            for page in range(1, 31): # 先縮減到 30 頁確保穩定
+            print(">>> [爬蟲] 開始挖掘 50 頁爆文資料...", flush=True)
+            
+            for page in range(1, 51):
+                # 正確的搜尋網址：recommend:100
                 url = f"https://www.ptt.cc/bbs/Beauty/search?page={page}&q=recommend%3A100"
                 r = requests.get(url, cookies={"over18": "1"}, timeout=10)
                 s = BeautifulSoup(r.text, "html.parser")
                 arts = s.select("div.r-ent")
-                if not arts: break
+                
+                if not arts:
+                    print(f"第 {page} 頁無資料，停止搜尋。", flush=True)
+                    break
                 
                 for art in arts:
                     t = art.select_one("div.title a")
@@ -55,47 +51,71 @@ def fetch_data():
                             "img": ""
                         })
                 
-                # 每抓 5 頁就更新一次畫面，不要讓使用者乾等
-                if page % 5 == 0:
+                # 每抓 10 頁更新一次清單，讓網頁能先顯示標題
+                if page % 10 == 0:
                     beauty_images = list(temp_list)
-                    print(f"進度：已載入 {len(beauty_images)} 則文章...")
-                time.sleep(0.5)
+                    print(f">>> [進度] 已取得 {len(beauty_images)} 則標題...", flush=True)
+                
+                time.sleep(0.3) # 稍微緩衝，不要讓 PTT 覺得是攻擊
 
-            # 補圖 (只補前 30 張最熱門的)
-            for i in range(min(30, len(temp_list))):
+            # 抓取前 40 則的預覽圖 (為了效能，不抓全部 1000 則的圖)
+            print(">>> [圖片] 開始抓取前 40 則熱門圖...", flush=True)
+            for i in range(min(40, len(temp_list))):
                 if not temp_list[i]["img"]:
                     temp_list[i]["img"] = get_img_url(temp_list[i]["link"])
-                if i % 5 == 0: beauty_images = list(temp_list)
+                if i % 10 == 0:
+                    beauty_images = list(temp_list) # 即時更新到網頁
 
             beauty_images = temp_list
-            print(">>> [完成] 全部資料同步完畢")
+            print(f">>> [完成] 考古完畢，共庫存 {len(beauty_images)} 則爆文", flush=True)
             
         except Exception as e:
-            print(f">>> [警告] 發生錯誤: {e}")
+            print(f">>> [錯誤] {e}", flush=True)
         
-        time.sleep(1200)
+        time.sleep(1800) # 每 30 分鐘更新一次最新爆文
 
 @app.route('/')
 def home():
-    style = "<style>body{background:#111;color:#eee;font-family:sans-serif;padding:20px;}.section-title{color:pink;border-bottom:1px solid pink;margin:20px 0;}.post{margin:5px 0;}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:15px;}.card{background:#222;border-radius:8px;overflow:hidden;height:350px;border:1px solid #444;}.card img{width:100%;height:70%;object-fit:cover;}</style>"
+    style = """
+    <style>
+        body { background:#000; color:#eee; font-family:sans-serif; text-align:center; padding:20px; }
+        .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:20px; padding:20px; }
+        .card { background:#111; border-radius:12px; overflow:hidden; border:1px solid #333; height:420px; transition:0.3s; }
+        .card:hover { border-color:#ff4081; transform:translateY(-5px); }
+        .card img { width:100%; height:75%; object-fit:cover; background:#222; }
+        .info { padding:15px; text-align:left; font-size:14px; }
+        .date { color:#ff4081; font-weight:bold; font-size:12px; }
+        a { text-decoration:none; color:inherit; }
+    </style>
+    """
     
-    g_html = "".join(gossiping_logs) if gossiping_logs else "八卦版連線中..."
-    b_html = "<div class='section-title'>💎 表特爆文庫</div>"
+    html = "<h1>💎 PTT 表特版 1000 則爆文庫</h1>"
     
     if not beauty_images:
-        b_html += "<p>正在深度挖掘中，請稍候 30 秒後刷新網頁...</p>"
+        html += "<div style='padding:50px;'><h3>🛸 機器人正在深度挖掘中...</h3><p>預計需要 30-60 秒，網頁會自動刷新</p></div>"
     else:
-        b_html += "<div class='grid'>"
+        html += "<div class='grid'>"
         for p in beauty_images:
-            img = f"<img src='{p['img']}'>" if p['img'] else "<div style='height:70%;display:flex;align-items:center;justify-content:center;background:#333;'>點擊看原文</div>"
-            b_html += f"<div class='card'><a href='{p['link']}' target='_blank' style='color:#fff;text-decoration:none;'>{img}<div style='padding:10px;'>[{p['date']}]<br>{p['title']}</div></a></div>"
-        b_html += "</div>"
+            # 如果還沒抓到圖，顯示點擊查看標誌
+            img_src = p['img'] if p['img'] else "https://placehold.co/400x600/222/555?text=Click+to+View"
+            html += f"""
+            <div class='card'>
+                <a href='{p['link']}' target='_blank'>
+                    <img src='{img_src}' loading='lazy'>
+                    <div class='info'>
+                        <span class='date'>[{p['date']}]</span><br>
+                        {p['title']}
+                    </div>
+                </a>
+            </div>
+            """
+        html += "</div>"
         
-    return f"<html><head><meta http-equiv='refresh' content='30'><meta name='viewport' content='width=device-width, initial-scale=1'>{style}</head><body>{g_html}{b_html}</body></html>"
+    return f"<html><head><title>表特 1000 爆</title><meta http-equiv='refresh' content='60'><meta name='viewport' content='width=device-width, initial-scale=1'>{style}</head><body>{html}</body></html>"
 
 if __name__ == "__main__":
-    t = threading.Thread(target=fetch_data)
-    t.daemon = True
+    # 背景執行爬蟲
+    t = threading.Thread(target=fetch_data, daemon=True)
     t.start()
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    # 啟動 Flask
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
